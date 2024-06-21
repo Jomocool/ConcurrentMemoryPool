@@ -5,12 +5,16 @@
 #include <vector>
 #include <assert.h>
 #include <thread>
+#include <mutex>
 using std::cout;
 using std::endl;
 using std::vector;
 
+typedef size_t PageID;
+
 static const size_t FREE_LIST_NUM = 208;    // 哈希表中自由链表的个数
 static const size_t MAX_BYTES = 256 * 1024; // ThreadCache单次申请的最大字节数
+static const size_t PAGE_NUM = 128;         // span的最大管理页数
 
 /// @brief obj的一个指针大小的字节
 /// @details 用static修饰，防止多个.cpp文件重复包含该Common头文件导致链接时产生冲突
@@ -32,6 +36,13 @@ public:
         _freeList = obj;
     }
 
+    // 插入多块空间
+    void pushRange(void *start, void *end)
+    {
+        ObjNext(end) = _freeList;
+        _freeList = start;
+    }
+
     // 提供空间
     void *pop()
     {
@@ -48,8 +59,15 @@ public:
         return _freeList == nullptr;
     }
 
+    // FreeList当前未到上限时，能够申请的最大块空间是多少
+    size_t &MaxSize()
+    {
+        return _maxSize;
+    }
+
 private:
     void *_freeList = nullptr; // 自由链表，初始为空
+    size_t _maxSize = 1;       // 当前自由链表申请未达到上限时，能够申请的最大空间块数
 };
 
 /// @brief 计算线程申请的空间大小对齐后的字节数
@@ -97,6 +115,22 @@ public:
         return res;
     }
 
+    static size_t NumMoveSize(size_t size)
+    {
+        assert(size > 0);
+
+        // 计算块数
+        int num = MAX_BYTES / size;
+
+        // 保证单次分配的块数控制在[2,512]
+        if (num > 512)
+            num = 512;
+        else if (num < 2)
+            num = 2;
+
+        return num;
+    }
+
 private:
     static inline size_t _Index(size_t size, size_t align_shift)
     {
@@ -107,6 +141,58 @@ private:
     {
         return ((size + alignNum - 1) & ~(alignNum - 1));
     }
+};
+
+/// @brief 以页为基本单位的结构体
+struct Span
+{
+    PageID _pageID = 0;        // 页号
+    size_t _n;                 // 管理的页数量
+    void *_freeList = nullptr; // 管理的小块空间的头节点
+    size_t _use_count = 0;     // 已分配的小块空间数量
+    Span *prev = nullptr;      // 前一个Span节点
+    Span *next = nullptr;      // 后一个Span节点
+};
+
+class SpanList
+{
+public:
+    SpanList()
+    {
+        _head = new Span;
+
+        // 由于是双向链表，所以需要正确初始化prev、next
+        _head->prev = _head;
+        _head->next = _head;
+    }
+
+    /// @brief 在pos前插入ptr
+    void insert(Span *pos, Span *ptr)
+    {
+        // 都不能为空
+        assert(pos);
+        assert(ptr);
+
+        ptr->next = pos;
+        ptr->prev = pos->prev;
+        pos->prev->next = ptr;
+        pos->prev = ptr;
+    }
+
+    /// @brief 删除节点
+    void erase(Span *pos)
+    {
+        assert(pos);
+        assert(pos != _head); // 不能删去哨兵头节点
+
+        pos->prev->next = pos->next;
+        pos->next->prev = pos->prev;
+    }
+
+private:
+    Span *_head; // 哨兵头节点
+public:
+    std::mutex _mtx; // 每个CentralCache中的桶都要有一个桶锁（多线程安全）
 };
 
 #endif

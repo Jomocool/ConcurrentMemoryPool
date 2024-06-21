@@ -2,6 +2,7 @@
 #define THREAD_CACHE_H
 
 #include "Common.h"
+#include "CentralCache.h"
 
 class ThreadCache
 {

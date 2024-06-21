@@ -32,7 +32,28 @@ void ThreadCache::Deallocate(void *obj, size_t size)
 /// @brief ThreadCache空间不够时，向CentralCache申请空间
 void *ThreadCache::FetchFromCentralCache(size_t index, size_t alignSize)
 {
-    // TODO
+    // 通过MaxSize和NumMoveSize来控制当前分配的块数
+    size_t batchNum = std::min(_freeLists[index].MaxSize(), SizeClass::NumMoveSize(alignSize)); // 取最小值是防止MaxSize一直递加过大
 
-    return nullptr;
+    // 当前_maxSize没有达到上限，仍可增加
+    if (batchNum == _freeLists[index].MaxSize())
+        _freeLists[index].MaxSize()++;
+
+    // 上面就是慢开始反馈算法
+
+    // 因为返回的空间大小可能不满足需求，所以需要记录返回空间的起始、结束地址
+    void *start = nullptr;
+    void *end = nullptr;
+    int actualNum = CentralCache::GetInstance()->FetchRangeObj(start, end, batchNum, alignSize);
+
+    assert(actualNum >= 1);
+
+    // 不需要push到tc的自由链表了
+    if (actualNum == 1)
+        assert(start == end);
+    else
+        _freeLists[index].pushRange(ObjNext(start), end); // 将多余块放入自由链表中
+
+    // 返回第一块给线程
+    return start;
 }
