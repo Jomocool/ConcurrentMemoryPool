@@ -15,6 +15,7 @@ typedef size_t PageID;
 static const size_t FREE_LIST_NUM = 208;    // 哈希表中自由链表的个数
 static const size_t MAX_BYTES = 256 * 1024; // ThreadCache单次申请的最大字节数
 static const size_t PAGE_NUM = 128;         // span的最大管理页数
+static const size_t PAGE_SHIFT = 12;        // 一页4KB，12位
 
 /// @brief obj的一个指针大小的字节
 /// @details 用static修饰，防止多个.cpp文件重复包含该Common头文件导致链接时产生冲突
@@ -22,6 +23,15 @@ static const size_t PAGE_NUM = 128;         // span的最大管理页数
 static void *&ObjNext(void *obj)
 {
     return *(void **)obj;
+}
+
+/// @brief 向系统申请k页内存空间
+void *SystemAlloc(size_t k)
+{
+    void *ptr = malloc(k << PAGE_SHIFT);
+    if (ptr == nullptr)
+        throw std::bad_alloc();
+    return ptr;
 }
 
 class FreeList
@@ -68,6 +78,7 @@ public:
 private:
     void *_freeList = nullptr; // 自由链表，初始为空
     size_t _maxSize = 1;       // 当前自由链表申请未达到上限时，能够申请的最大空间块数
+    size_t _size = 0;          // 当前自由链表的块数量
 };
 
 /// @brief 计算线程申请的空间大小对齐后的字节数
@@ -115,6 +126,7 @@ public:
         return res;
     }
 
+    /// @brief 计算块空间大小为size时，单次能够申请的最大块数
     static size_t NumMoveSize(size_t size)
     {
         assert(size > 0);
@@ -129,6 +141,15 @@ public:
             num = 2;
 
         return num;
+    }
+
+    /// @brief 块页匹配算法
+    static size_t NumMovePage(size_t size)
+    {
+        size_t num = NumMoveSize(size); // 最大分配块数
+        size_t npage = num * size;      // 单次申请的最大空间
+        npage >> PAGE_SHIFT;            // 页数
+        return npage == 0 ? 1 : npage;  // 至少分配一页，不足一页时也分配一页
     }
 
 private:
@@ -164,6 +185,36 @@ public:
         // 由于是双向链表，所以需要正确初始化prev、next
         _head->prev = _head;
         _head->next = _head;
+    }
+
+    /// @brief 弹出第一个Span
+    Span *pop_front()
+    {
+        Span *front = _head->next;
+        erase(front);
+        return front;
+    }
+
+    /// @brief 判断是否有Span
+    bool empty()
+    {
+        return _head == _head->next;
+    }
+
+    Span *begin()
+    {
+        return _head->next;
+    }
+
+    Span *end()
+    {
+        return _head;
+    }
+
+    /// @brief 头插
+    void push_front(Span *ptr)
+    {
+        insert(_head, ptr);
     }
 
     /// @brief 在pos前插入ptr
