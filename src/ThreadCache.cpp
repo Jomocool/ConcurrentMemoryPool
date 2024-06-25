@@ -18,7 +18,7 @@ void *ThreadCache::Allocate(size_t size)
     }
 }
 
-/// @brief 回收线程大小为size的obj空间
+/// @brief 回收线程中大小为size、起始地址为obj的空间
 void ThreadCache::Deallocate(void *obj, size_t size)
 {
     assert(obj);               // 回收空间不能为空
@@ -27,6 +27,12 @@ void ThreadCache::Deallocate(void *obj, size_t size)
     // size可以保证已经是对齐的
     size_t index = SizeClass::Index(size); // 找到对应自由链表的下标
     _freeLists[index].push(obj);           // 用对应自由链表回收obj
+
+    // 当前桶中的块数大于单次能够分配的最大块数时归还
+    if (_freeLists[index].size() >= _freeLists[index].MaxSize())
+    {
+        ListTooLong(_freeLists[index], size);
+    }
 }
 
 /// @brief ThreadCache空间不够时，向CentralCache申请空间
@@ -52,8 +58,18 @@ void *ThreadCache::FetchFromCentralCache(size_t index, size_t alignSize)
     if (actualNum == 1)
         assert(start == end);
     else
-        _freeLists[index].pushRange(ObjNext(start), end); // 将多余块放入自由链表中
+        _freeLists[index].pushRange(ObjNext(start), end, actualNum - 1); // 将多余块放入自由链表中
 
     // 返回第一块给线程
     return start;
+}
+
+void ThreadCache::ListTooLong(FreeList &list, size_t n)
+{
+    void *start = nullptr;
+    void *end = nullptr;
+
+    list.PopRange(start, end, list.MaxSize());
+
+    
 }

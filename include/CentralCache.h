@@ -22,6 +22,10 @@ public:
     // 获取一个管理空间不为空的Span
     Span *GetOneSpan(SpanList &list, size_t size);
 
+    /// @brief 将tc还回来的多块空间放到Span中
+    /// @param size 单块空间大小
+    void ReleaseListToSpans(void*start,size_t size);
+
 private:
     // 隐藏构造、拷贝构造、赋值构造函数
     CentralCache() {};

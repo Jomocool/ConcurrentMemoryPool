@@ -43,14 +43,19 @@ public:
         // 头插
         assert(obj); // 插入非空空间
         ObjNext(obj) = _freeList;
+
+        ++_size;
+
         _freeList = obj;
     }
 
     // 插入多块空间
-    void pushRange(void *start, void *end)
+    void pushRange(void *start, void *end, size_t size)
     {
         ObjNext(end) = _freeList;
         _freeList = start;
+
+        _size += size;
     }
 
     // 提供空间
@@ -60,7 +65,25 @@ public:
         assert(_freeList); // 提供空间的前提是要有空间
         void *obj = _freeList;
         _freeList = ObjNext(obj);
+
+        --_size;
+
         return obj;
+    }
+
+    void PopRange(void *&start, void *&end, size_t n)
+    {
+        assert(n <= _size);
+
+        start = end = _freeList;
+        for (int i = 0; i < n - 1; ++i)
+        {
+            end = ObjNext(end);
+        }
+
+        _freeList = ObjNext(end);
+        ObjNext(end) = nullptr;
+        _size -= n;
     }
 
     // 判断是否为空
@@ -73,6 +96,11 @@ public:
     size_t &MaxSize()
     {
         return _maxSize;
+    }
+
+    size_t size()
+    {
+        return _size;
     }
 
 private:
@@ -173,6 +201,7 @@ struct Span
     size_t _use_count = 0;     // 已分配的小块空间数量
     Span *prev = nullptr;      // 前一个Span节点
     Span *next = nullptr;      // 后一个Span节点
+    bool _isUse = false;       // 是否在pc中
 };
 
 class SpanList

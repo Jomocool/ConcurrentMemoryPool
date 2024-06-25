@@ -20,6 +20,7 @@ Span *CentralCache::GetOneSpan(SpanList &list, size_t size)
     size_t k = SizeClass::NumMovePage(size); // 申请k页
     PageCache::GetInstance()->_pageMtx.lock();
     Span *span = PageCache::GetInstance()->NewSpan(k); // 返回一个 完全没有划分 的Span
+    span->_isUse = true;
     PageCache::GetInstance()->_pageMtx.unlock();
 
     // 开始切分span，切分成一个一个块，每个块大小为size
@@ -70,4 +71,43 @@ size_t CentralCache::FetchRangeObj(void *&start, void *&end, size_t batchNum, si
     _spanLists[index]._mtx.unlock();
 
     return actualNum;
+}
+
+void CentralCache::ReleaseListToSpans(void *start, size_t size)
+{ // 不需要传整体的大小，因为通过ObjNext从start开始遍历，最终会为nullptr
+    // 通过size找到桶下标
+    size_t index = SizeClass::Index(size);
+
+    _spanLists[index]._mtx.lock();
+
+    // 遍历start，将各个块放到对应的Span所管理的_freeList中
+    while (start)
+    {
+        void *next = ObjNext(start);                                   // 记录start的下一块
+        Span *span = PageCache::GetInstance()->MapObjectToSpan(start); // 获取管理start的对应Span
+        // 回收到自由链表中
+        ObjNext(start) = span->_freeList;
+        span->_freeList = start;
+
+        --span->_use_count; // 减少已分配块数量
+        if (span->_use_count == 0)
+        { // cc当前管理的这个span所有页都归还回来了，可以考虑归还给pc了
+            // 先将span从cc中删去
+            _spanLists[index].erase(span);
+            span->_freeList = nullptr;
+            span->prev = nullptr;
+            span->next = nullptr;
+
+            _spanLists[index]._mtx.unlock();
+
+            PageCache::GetInstance()->_pageMtx.lock();
+            PageCache::GetInstance()->ReleaseSpanToPageCache(span);
+            PageCache::GetInstance()->_pageMtx.unlock();
+
+            _spanLists[index]._mtx.lock();
+        }
+        start = next; // 跳到下一块
+    }
+
+    _spanLists[index]._mtx.unlock();
 }
